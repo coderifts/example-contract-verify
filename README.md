@@ -1,41 +1,125 @@
-# CodeRifts LangGraph Guard
+# example-contract-verify
 
-A minimal [LangGraph](https://github.com/langchain-ai/langgraph) guard node that wires the
-CodeRifts verdict directly into the agent loop.
+A tiny, dependency-free reference for the **verify side** of a discovery and
+attestation protocol for AI tool contracts.
 
-Before the agent acts on a tool whose API contract may have drifted, the guard node diffs
-the tool's old vs new spec against the zero-auth CodeRifts endpoint
-(`POST https://app.coderifts.com/api/v1/demo`). On `BLOCK` the graph routes to `abort` and
-the unsafe call never runs; on a safe verdict it proceeds to `execute`. No API key required.
+An agent fetches a small signed bundle that describes a tool's current API
+contract, verifies it, and gets a verdict before any tool code runs. This repo
+implements the verify half: signature check, hash pin, freshness, and the
+verdict gate. It runs on plain `python3` with no installs.
 
-## Run
+It is the companion to the protocol sketch:
+https://coderifts.com/blog/contract-discovery-attestation-protocol/
+
+The design was worked out in the open. The fetch-flow half (well-known endpoint
+plus the signed ref advertisement) is being sketched separately; this is the
+verify half, meant to wire together into one reference loop. The combined round
+trip (fetch plus verify) now runs end to end in `demo_loop.py`.
+
+## The bundle
+
+A bundle is a small JSON object. The signature covers every field except `signature`. The canonical, machine
+readable schema is [`bundle.schema.json`](bundle.schema.json) with a
+human-readable reference in [`SCHEMA.md`](SCHEMA.md). Any issuer can produce a
+conformant bundle and any agent can verify one without sharing code.
 
 ```
-pip install langgraph
-python coderifts_langgraph_guard.py
+{
+  "ref": "refs/heads/main",
+  "commit_sha": "<40 hex>",
+  "content_hash": "sha256:<hex>",
+  "issued_at": 1000000,
+  "ttl_seconds": 300,
+  "version": 7,
+  "verdict": "PASS",            // PASS | REQUIRE_APPROVAL | BLOCK
+  "key_id": "ed25519:guard-ci",
+  "signature": "<hex>"
+}
 ```
 
-On Python 3.9, pin the compatible release: `pip install "langgraph==0.6.11"`.
+## The verify pipeline
 
-## Expected output
+Order matters:
+
+1. **Signature.** Verify the bundle signature against a trusted guard key.
+2. **Hash pin.** `content_hash` must equal `sha256` of the contract bytes.
+3. **Freshness.** `ref` matches, `version` is not lower than the last accepted
+   version (rollback protection), and the bundle is inside its TTL.
+4. **Gate.** Map the verdict to an action: `PASS` allows, `REQUIRE_APPROVAL`
+   holds for escalation, `BLOCK` denies. The agent acts on this before calling
+   the tool.
+
+Freshness rides on the signed bundle itself, so the agent never walks git
+history and makes no extra roundtrips. The version plus TTL is the timestamp
+role from TUF, scoped to a single repo, with no central authority.
+
+## Run it
+
+No dependencies. Ed25519 is a small pure-Python implementation in `_ed25519.py`.
 
 ```
-[guard] get_order_status: decision=BLOCK should_block=True breaking_changes=1 patterns=[FIELD_REMOVAL]
-[abort] CodeRifts BLOCK -> get_order_status not called, agent halted
-final: aborted get_order_status (CodeRifts BLOCK)
+python3 demo.py
+python3 -m unittest -v
 ```
 
-## What it shows
+For the full round trip (fetch side plus verify side), `demo_loop.py` serves a
+well-known endpoint from a local stdlib HTTP server, fetches it, and runs the
+verify pipeline end to end. Still zero dependencies.
 
-The sample before/after pair renames the response field `order_status` to `status`.
-CodeRifts flags `FIELD_REMOVAL` (HIGH) and the `TOOL_RESULT_SHAPE_DRIFT` reflex escalates the
-decision to `BLOCK` even though the raw risk score is low, so the agent halts before calling
-the tool against the now-incompatible contract.
+```
+python3 demo_loop.py
+```
 
-Swap `OLD_SPEC` / `NEW_SPEC` for your own before/after pair to watch the verdict shift.
+Expected round-trip trace:
 
-## How the guard node reads the verdict
+```
+GET /.well-known/contract      | bundle v7, contract 72 bytes
+verify_bundle                  | ok=True verdict=PASS action=allow
+last_seen bump                 | -1 -> 7
+revalidate at v7               | ok=True action=allow
+tampered contract served       | ok=False reason=hash pin mismatch
+```
 
-The guard treats the structured verdict as the source of truth: it blocks when
-`should_block` is true or `omega_decision == "BLOCK"`, and surfaces the detected patterns
-(e.g. `FIELD_REMOVAL`) and the reflex triggers that drove the decision.
+Expected demo trace:
+
+```
+fresh PASS                 | ACCEPT | verdict=PASS             | action=allow | ok
+revalidate at v7           | ACCEPT | verdict=PASS             | action=allow | ok
+fresh BLOCK                | ACCEPT | verdict=BLOCK            | action=deny  | ok
+fresh REQUIRE_APPROVAL     | ACCEPT | verdict=REQUIRE_APPROVAL | action=hold  | ok
+tampered contract          | REJECT | verdict=-                | action=-     | hash pin mismatch
+rollback to v5             | REJECT | verdict=-                | action=-     | rollback: version 5 < last seen 7
+expired (past TTL)         | REJECT | verdict=-                | action=-     | expired: now 1000301 > issued_at+ttl 1000300
+wrong ref (dev)            | REJECT | verdict=-                | action=-     | ref mismatch: refs/heads/dev
+untrusted signer           | REJECT | verdict=-                | action=-     | signature invalid
+```
+
+## What this is, and is not
+
+- This is the **protocol** verify layer. The guard that decides
+  `PASS / REQUIRE_APPROVAL / BLOCK` is a black box here. Any guard that emits a
+  deterministic, signable verdict fits.
+- `issuer.py` is a local signer that stands in for the guard so the example runs
+  end to end. In a real deployment the verdict is signed by the guard identity
+  in CI: keyless OIDC workload identity, or a guard public key anchored in the
+  signed repo so git history is the root of trust.
+- Provenance stays with the author commit signature. The verdict is a separate
+  signature from the guard. Two roles, two keys.
+
+## Files
+
+- `coderifts_verify.py` verify pipeline and the gate
+- `_ed25519.py` dependency-free Ed25519
+- `bundle.schema.json` canonical bundle schema (JSON Schema 2020-12)
+- `SCHEMA.md` human-readable reference for the bundle
+- `schema_validate.py` dependency-free schema checker
+- `issuer.py` test signer (stands in for the guard in CI)
+- `fetcher.py` minimal reference fetch side: one GET of the well-known endpoint
+- `demo.py` verify-side scenarios, prints the trace, asserts every outcome
+- `demo_loop.py` full round trip: serves a well-known endpoint, fetches, verifies
+- `test_verify.py` verify-side unit tests
+- `test_schema.py` schema conformance tests
+
+## License
+
+MIT. See `LICENSE`.
