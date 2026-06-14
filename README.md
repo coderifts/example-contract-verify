@@ -80,6 +80,24 @@ revalidate at v7               | ok=True action=allow
 tampered contract served       | ok=False reason=hash pin mismatch
 ```
 
+For the zero-config agent path, `contract_guard` wraps any tool so the live
+contract verdict gates every call. The tool body runs only on PASS. Stack it
+under a framework tool decorator (LangGraph, LangChain) or use it on a plain
+function.
+
+```
+python3 demo_decorator.py
+```
+
+Expected decorator trace:
+
+```
+PASS                         | tool ran -> 'order A1: shipped'  (ran=1)
+BLOCK                        | raised ContractGuardBlocked(BLOCK), body skipped (ran=1)
+REQUIRE_APPROVAL             | raised ContractGuardHold(REQUIRE_APPROVAL), body skipped (ran=1)
+tampered contract            | raised ContractGuardError(hash pin mismatch), body skipped (ran=1)
+```
+
 Expected demo trace:
 
 ```
@@ -115,10 +133,13 @@ untrusted signer           | REJECT | verdict=-                | action=-     | 
 - `schema_validate.py` dependency-free schema checker
 - `issuer.py` test signer (stands in for the guard in CI)
 - `fetcher.py` minimal reference fetch side: one GET of the well-known endpoint
+- `decorator.py` zero-config `contract_guard` for any agent tool
 - `demo.py` verify-side scenarios, prints the trace, asserts every outcome
 - `demo_loop.py` full round trip: serves a well-known endpoint, fetches, verifies
+- `demo_decorator.py` guarded tool: runs on PASS, skipped on BLOCK or hold or tamper
 - `test_verify.py` verify-side unit tests
 - `test_schema.py` schema conformance tests
+- `test_decorator.py` decorator gate tests
 
 ## License
 
