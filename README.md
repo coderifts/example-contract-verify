@@ -23,6 +23,10 @@ readable schema is [`bundle.schema.json`](bundle.schema.json) with a
 human-readable reference in [`SCHEMA.md`](SCHEMA.md). Any issuer can produce a
 conformant bundle and any agent can verify one without sharing code.
 
+The well-known document carries the `bundle` plus the contract, delivered either
+inline as `contract` (small specs, single round trip) or as a `contract_url` the
+agent fetches separately (large specs). `fetcher.py` handles both.
+
 Cross-implementation conformance vectors live in
 [`test-vectors.json`](test-vectors.json): signed bundles, contracts, and
 expected outcomes, plus the guard public key, covering every gate. Any verify
@@ -144,6 +148,7 @@ untrusted signer           | REJECT | verdict=-                | action=-     | 
 - `demo_decorator.py` guarded tool: runs on PASS, skipped on BLOCK or hold or tamper
 - `test_verify.py` verify-side unit tests
 - `test_schema.py` schema conformance tests
+- `test_fetcher.py` envelope tests (inline contract and contract_url)
 - `test_decorator.py` decorator gate tests
 - `test-vectors.json` cross-implementation conformance vectors (with guard public key)
 - `check_vectors.py` runs any verify side against the vectors
