@@ -23,6 +23,11 @@ readable schema is [`bundle.schema.json`](bundle.schema.json) with a
 human-readable reference in [`SCHEMA.md`](SCHEMA.md). Any issuer can produce a
 conformant bundle and any agent can verify one without sharing code.
 
+Cross-implementation conformance vectors live in
+[`test-vectors.json`](test-vectors.json): signed bundles, contracts, and
+expected outcomes, plus the guard public key, covering every gate. Any verify
+side can be checked against them with `python3 check_vectors.py`.
+
 ```
 {
   "ref": "refs/heads/main",
@@ -140,6 +145,9 @@ untrusted signer           | REJECT | verdict=-                | action=-     | 
 - `test_verify.py` verify-side unit tests
 - `test_schema.py` schema conformance tests
 - `test_decorator.py` decorator gate tests
+- `test-vectors.json` cross-implementation conformance vectors (with guard public key)
+- `check_vectors.py` runs any verify side against the vectors
+- `test_vectors.py` runs the vectors in the test suite
 
 ## License
 
